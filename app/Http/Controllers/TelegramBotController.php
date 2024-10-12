@@ -23,7 +23,7 @@ class TelegramBotController extends Controller
         $data = $request->all();
         $chat_id = $data['message']['chat']['id'] ?? null;
         $name = $data['message']['from']['first_name'] ?? 'Foydalanuvchi';
-
+        session(['awaiting_input' => 'text']);
         if (!$chat_id) {
             return response()->json(['error' => 'Chat ID not found.'], 400);
         }
@@ -42,14 +42,13 @@ class TelegramBotController extends Controller
         if ($tgUser->role !== 'admin' && $tgUser->role !== 'super_admin') {
             $this->handleUserCommands($data);
 
-                $this->saveFile($data);
-
 
             if (session()->has('awaiting_input')) {
                 $awaitingInput = session('awaiting_input');
 
                 if ($awaitingInput === 'text') {
-                    $this->saveAccountDetails($data); // Ma'lumotlarni saqlash
+                    $this->sendMessage($chat_id, $data);
+                    $this->saveAccountDetails($data);
                 }
             }
         }
@@ -126,11 +125,18 @@ class TelegramBotController extends Controller
             return;
         }
 
+        // Yangi Account yozuvini yaratish
         $account = new Account();
         $account->properties = $inputData;
         $account->tg_user_id = $tgUser->id;
         $account->is_approved = false;
         $account->save();
+
+        // Yangi yozuvning ID sini olish
+        $accountId = $account->id;
+
+        // Faylni saqlash
+        $this->saveFile($data, $accountId); // Account ID ni argument sifatida o'tkazish
 
         $this->sendSticker($chat_id, "CAADAgADtgIAAlcI4uIgLpmSpY15DgI"); // Bu yerda sticker ID'sini qo'shing
         $this->sendMessage($chat_id, "✅ Akk sotish uchun qo'yildi, kanalga qo'yilishi uchun protsesga qo'yildi! \n\n📝 Iltimos, izohlaringizni qoldiring yoki boshqa buyurtmalar bilan davom eting!");
@@ -140,7 +146,7 @@ class TelegramBotController extends Controller
 
     protected function sendSticker($chat_id, $sticker_id)
     {
-        $url = "https://api.telegram.org/bot" . env('TELEGRAM_BOT_TOKEN') . "/sendSticker";
+        $url = "https://api.telegram.org/bot" . "7931781626:AAFS5F08sF1SJttX8-PqgjNv76GW0kCB3Yg" . "/sendSticker";
 
         $postData = [
             'chat_id' => $chat_id,
@@ -166,9 +172,10 @@ class TelegramBotController extends Controller
         }
     }
 
-    protected function saveFile($data)
+    protected function saveFile($data, $accountId) // accountId ni qo'shish
     {
         $chat_id = $data['message']['chat']['id'];
+
         if (isset($data['message']['photo']) || isset($data['message']['video'])) {
             if (isset($data['message']['photo'])) {
                 $file_id = end($data['message']['photo'])['file_id']; // Eng katta rasmni olish
@@ -189,9 +196,17 @@ class TelegramBotController extends Controller
 
                 $fileContent = file_get_contents($fileUrl);
                 $fileName = basename($filePath);
-                $savePath = public_path("uploads" . uniqid(). "_" . $fileName); // Saqlash joyi
+                $savePath = public_path("uploads/" . uniqid() . "_" . $fileName);
 
-                file_put_contents($savePath, $fileContent); // Faylni saqlash
+                // Faylni saqlash
+                file_put_contents($savePath, $fileContent);
+
+                // Media faylni Account ga bog'lash
+                $account = Account::find($accountId); // ID orqali accountni topish
+                if ($account) {
+                    $account->media_file_path = $savePath; // Fayl yo'lini saqlash
+                    $account->save(); // O'zgartirishlarni saqlash
+                }
 
                 $this->sendMessage($chat_id, "✅ Fayl muvaffaqiyatli saqlandi: $fileName");
             } else {
