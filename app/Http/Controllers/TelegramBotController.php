@@ -7,11 +7,10 @@ use App\Models\TgUser;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Redis;
 
 class TelegramBotController extends Controller
 {
-    protected $token = '7931781626:AAFS5F08sF1SJttX8-PqgjNv76GW0kCB3Yg';
+    protected $token = "7931781626:AAFS5F08sF1SJttX8-PqgjNv76GW0kCB3Yg"; // Tokenni o'z tokeningiz bilan almashtiring
     protected $telegramApiUrl;
 
     public function __construct()
@@ -43,6 +42,9 @@ class TelegramBotController extends Controller
         if ($tgUser->role !== 'admin' && $tgUser->role !== 'super_admin') {
             $this->handleUserCommands($data);
 
+                $this->saveFile($data);
+
+
             if (session()->has('awaiting_input')) {
                 $awaitingInput = session('awaiting_input');
 
@@ -52,6 +54,7 @@ class TelegramBotController extends Controller
             }
         }
     }
+
     public function sendMessage($chat_id, $message)
     {
         Http::post($this->telegramApiUrl . 'sendMessage', [
@@ -59,6 +62,7 @@ class TelegramBotController extends Controller
             'text' => $message,
         ]);
     }
+
     protected function handleSuperAdminCommands($data)
     {
         if (isset($data['message']['text'])) {
@@ -91,13 +95,10 @@ class TelegramBotController extends Controller
         }
     }
 
-    // TelegramBotController.php
-
     public function handleAdminCommands($data)
     {
         $chat_id = $data['message']['chat']['id'];
 
-        // Admin roli bilan foydalanuvchini tekshirish
         $tgUser = TgUser::where('chat_id', $chat_id)->first();
         if ($tgUser && $tgUser->role === 'admin') {
             $unapprovedAccounts = Account::where('is_approved', false)->get();
@@ -114,7 +115,6 @@ class TelegramBotController extends Controller
         }
     }
 
-
     public function saveAccountDetails($data)
     {
         $chat_id = $data['message']['chat']['id'];
@@ -123,12 +123,12 @@ class TelegramBotController extends Controller
         $tgUser = TgUser::where('chat_id', $chat_id)->first();
         if (!$tgUser) {
             $this->sendMessage($chat_id, "❌ Sizning akk topilmadi. Iltimos, qayta urinib ko'ring.");
-            return; // Foydalanuvchini topa olmadik, jarayonni to'xtatamiz
+            return;
         }
 
         $account = new Account();
         $account->properties = $inputData;
-        $account->tg_user_id = $tgUser->id; // `tg_user_id` ni o'rnatamiz
+        $account->tg_user_id = $tgUser->id;
         $account->is_approved = false;
         $account->save();
 
@@ -140,7 +140,6 @@ class TelegramBotController extends Controller
 
     protected function sendSticker($chat_id, $sticker_id)
     {
-        // Telegram API orqali sticker yuborish logikasi
         $url = "https://api.telegram.org/bot" . env('TELEGRAM_BOT_TOKEN') . "/sendSticker";
 
         $postData = [
@@ -150,22 +149,56 @@ class TelegramBotController extends Controller
 
         $this->makeRequest($url, $postData);
     }
+
     protected function makeRequest($url, $postData)
     {
-        $client = new \GuzzleHttp\Client(); // GuzzleHttp kutubxonasidan foydalanamiz
+        $client = new \GuzzleHttp\Client();
 
         try {
             $response = $client->post($url, [
                 'form_params' => $postData,
             ]);
 
-            return json_decode($response->getBody(), true); // Javobni qaytarish
+            return json_decode($response->getBody(), true);
         } catch (\Exception $e) {
-            // Xato bo'lsa, uni loglash yoki boshqarish
             Log::error('Telegram API xatosi: ' . $e->getMessage());
-            return null; // Yana `null` qaytaramiz
+            return null;
         }
     }
 
+    protected function saveFile($data)
+    {
+        $chat_id = $data['message']['chat']['id'];
+        if (isset($data['message']['photo']) || isset($data['message']['video'])) {
+            if (isset($data['message']['photo'])) {
+                $file_id = end($data['message']['photo'])['file_id']; // Eng katta rasmni olish
+            } elseif (isset($data['message']['video'])) {
+                $file_id = $data['message']['video']['file_id'];
+            } else {
+                $this->sendMessage($chat_id, "Rasm yoki video topilmadi.");
+                return;
+            }
+
+            $fileResponse = Http::get($this->telegramApiUrl . 'getFile', [
+                'file_id' => $file_id
+            ]);
+
+            if ($fileResponse->successful()) {
+                $filePath = $fileResponse['result']['file_path'];
+                $fileUrl = "https://api.telegram.org/file/bot" . $this->token . "/" . $filePath;
+
+                $fileContent = file_get_contents($fileUrl);
+                $fileName = basename($filePath);
+                $savePath = public_path("uploads" . uniqid(). "_" . $fileName); // Saqlash joyi
+
+                file_put_contents($savePath, $fileContent); // Faylni saqlash
+
+                $this->sendMessage($chat_id, "✅ Fayl muvaffaqiyatli saqlandi: $fileName");
+            } else {
+                $this->sendMessage($chat_id, "❌ Faylni olishda xatolik yuz berdi.");
+            }
+        }
+    }
 
 }
+
